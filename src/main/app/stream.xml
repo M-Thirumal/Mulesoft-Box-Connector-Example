@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:objectstore="http://www.mulesoft.org/schema/mule/objectstore"
+	xmlns:box="http://www.mulesoft.org/schema/mule/box"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/objectstore http://www.mulesoft.org/schema/mule/objectstore/current/mule-objectstore.xsd
+http://www.mulesoft.org/schema/mule/box http://www.mulesoft.org/schema/mule/box/current/mule-box.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd">
+<http:listener-config name="HTTP_Listener_Configuration" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration"/>
+    <box:config name="Box" clientId="05zpeboxxfms6fo7805izrxff9dwbc74" clientSecret="LVD5juoF7ookFVn4uN69Pco3NI4EQeE0" doc:name="Box">
+        <box:oauth-callback-config domain="localhost" localPort="8082" remotePort="8082" path="callback"/>
+    </box:config>
+    <objectstore:config name="ObjectStore__Connector" objectStore-ref="_defaultInMemoryObjectStore" doc:name="ObjectStore: Connector"/>
+    <flow name="AuthFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/box" doc:name="HTTP"/>
+        <box:authorize config-ref="Box" doc:name="Box"/>
+    </flow>
+    <flow name="streamFlow">
+        <box:listen-events config-ref="Box" doc:name="Box (Streaming)"/>
+        <set-variable variableName="defaultVariable" value="0" doc:name="Variable"/>
+        <objectstore:retrieve config-ref="ObjectStore__Connector" key="streamPosition" defaultValue-ref="#[flowVars.defaultVariable]" doc:name="ObjectStore"/>
+        <choice doc:name="Choice">
+            <when expression="#[payload != 0]">
+                <box:get-events config-ref="Box" streamPosition="#[payload]" doc:name="Get Events"/>
+                <objectstore:store config-ref="ObjectStore__Connector" key="streamPosition" value-ref="#[payload.nextStreamPosition]" overwrite="true" doc:name="StreamPosition"/>
+            </when>
+            <otherwise>
+                <box:get-events config-ref="Box" streamPosition="#[payload]" doc:name="Get Events"/>
+                <objectstore:store config-ref="ObjectStore__Connector" key="streamPosition" value-ref="#[payload.nextStreamPosition]" overwrite="true" doc:name="StreamPosition"/>
+                <set-payload value="0" doc:name="Set Payload"/>
+            </otherwise>
+        </choice>
+        <expression-filter expression="#[payload != 0]" doc:name="Expression"/>
+        <scripting:transformer doc:name="Groovy">
+            <scripting:script engine="Groovy"><![CDATA[return payload.entries.findAll{
+	it.eventType == 'ITEM_UPLOAD' || it.eventType == 'ITEM_CREATE'}]]></scripting:script>
+        </scripting:transformer>
+        <scripting:transformer doc:name="Groovy">
+            <scripting:script engine="Groovy"><![CDATA[return payload.findAll{it.source?.type == "file"}]]></scripting:script>
+        </scripting:transformer>
+        <flow-ref name="DownloadandUpload" doc:name="DownloadandUpload"/>
+    </flow>
+    <flow name="DownloadandUpload">
+        <expression-filter expression="#[payload.size() &gt; 0]" doc:name="Expression"/>
+        <foreach doc:name="For Each">
+            <set-payload value="#[payload.source.id]" doc:name="Set Payload"/>
+            <box:get-file-comments config-ref="Box" fileId="#[payload]" doc:name="Box"/>
+            <logger message="#[payload]" level="INFO" doc:name="Logger"/>
+        </foreach>
+    </flow>
+</mule>
